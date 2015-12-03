@@ -17,11 +17,12 @@ import gobblin.configuration.State;
 import gobblin.data.management.copy.CopyableFile;
 import gobblin.data.management.copy.FileAwareInputStream;
 import gobblin.data.management.copy.OwnerAndPermission;
-import gobblin.data.management.util.PathUtils;
+import gobblin.util.PathUtils;
 import gobblin.util.FileListUtils;
 import gobblin.util.ForkOperatorUtils;
 import gobblin.util.HadoopUtils;
 import gobblin.util.WriterUtils;
+import gobblin.util.io.StreamUtils;
 import gobblin.writer.DataWriter;
 
 import java.io.IOException;
@@ -39,7 +40,6 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.io.IOUtils;
 
 import com.google.common.io.Closer;
 
@@ -83,7 +83,7 @@ public class FileAwareInputStreamDataWriter implements DataWriter<FileAwareInput
 
     FSDataOutputStream os = fs.create(stagingFile, true);
     try {
-      IOUtils.copyBytes(fileAwareInputStream.getInputStream(), os, fs.getConf(), false);
+      bytesWritten += StreamUtils.copy(fileAwareInputStream.getInputStream(), os);
     } finally {
       os.close();
       fileAwareInputStream.getInputStream().close();
@@ -232,4 +232,8 @@ public class FileAwareInputStreamDataWriter implements DataWriter<FileAwareInput
   @Override
   public void cleanup() throws IOException {
   }
+
+
+
+
 }
