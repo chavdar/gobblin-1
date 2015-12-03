@@ -194,6 +194,7 @@ plugins.withType(JavaPlugin) {
 
   sourceCompatibility = JavaVersion.VERSION_1_7
 
+  //Sometimes generating javadocs can lead to OOM. This may needs to be increased.
   javadoc {
     options.JFlags = ["-Xmx256m"]
   }
