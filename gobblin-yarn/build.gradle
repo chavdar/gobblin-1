@@ -100,6 +100,12 @@ test {
   }
   workingDir rootProject.rootDir
   maxParallelForks = 1
+  beforeTest { descriptor ->
+    logger.lifecycle("Before test: ${descriptor.className}.${descriptor.name}")
+  }
+  afterTest { descriptor, result ->
+    logger.lifecycle("After test: ${descriptor.className}.${descriptor.name} -- > ${result}")
+  }
 }
 
 clean {
