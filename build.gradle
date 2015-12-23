@@ -284,13 +284,13 @@ plugins.withType(JavaPlugin) {
   
   // Disabling the FindBugs plugin for older versions of gradle because FindBugs 2.x is not compatible with Java8
   if (gradleVersionMajor > 2 || (gradleVersionMajor == 2 && gradleVersionMinor >= 5)) {
-    apply plugin: 'findbugs'
-
-    findbugs {
-      ignoreFailures = true
-      effort = "max"
-      excludeFilter = file(rootProject.projectDir.path + "/ligradle/findbugs/findbugsExclude.xml")
-    }
+    //apply plugin: 'findbugs'
+    //
+    //findbugs {
+    //  ignoreFailures = true
+    //  effort = "max"
+    //  excludeFilter = file(rootProject.projectDir.path + "/ligradle/findbugs/findbugsExclude.xml")
+    //}
   }
 
   sourceCompatibility = JavaVersion.VERSION_1_7
