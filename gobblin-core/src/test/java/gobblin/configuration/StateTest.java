@@ -18,6 +18,11 @@ import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocalFileSystem;
+import org.apache.hadoop.fs.Path;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -119,5 +124,19 @@ public class StateTest {
     Assert.assertEquals(state2.getPropAsInt("int"), Integer.MIN_VALUE);
     Assert.assertEquals(state2.getPropAsDouble("double"), Double.MIN_VALUE);
     Assert.assertEquals(state2.getPropAsBoolean("boolean"), false);
+  }
+
+  @Test
+  public void testFS() throws Exception {
+    Path p = new Path("file://.");
+    System.out.println("path=" + Path.getPathWithoutSchemeAndAuthority(p));
+    LocalFileSystem localFS = FileSystem.getLocal(new Configuration());
+    Path p2 = localFS.makeQualified(new Path("."));
+    System.out.println(p2);
+    FileSystem fs = p.getFileSystem(new Configuration());
+    Path p3 = fs.makeQualified(Path.getPathWithoutSchemeAndAuthority(p));
+    for (FileStatus s: fs.listStatus(p3)) {
+      System.out.println(s.getPath());
+    }
   }
 }
