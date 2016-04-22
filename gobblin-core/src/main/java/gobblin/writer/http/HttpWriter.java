@@ -29,6 +29,7 @@ import com.google.common.base.Preconditions;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigValue;
 
+import gobblin.annotation.Alpha;
 import gobblin.config.ConfigBuilder;
 import gobblin.configuration.State;
 import gobblin.instrumented.writer.InstrumentedDataWriter;
@@ -39,6 +40,7 @@ import gobblin.instrumented.writer.InstrumentedDataWriter;
  * the {@link #HTTPCLIENT_CONF_KEY} config object. The properties inside that object will be passed
  * using {@link HttpClientBuilder#useSystemProperties()}.
  * */
+@Alpha
 public class HttpWriter<D> extends InstrumentedDataWriter<D> {
   public static final String CONF_PREFIX = "gobblin.writer.http.";
 
@@ -63,21 +65,43 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
   private final List<String> _httpServers;
   private final String _httpMethod;
   private final String _publishPath;
+  private final HttpResponseClassifier _responseClassifier;
 
   private int _curHttpServerIdx;
   private HttpHost _curHttpHost;
   private URI _publishUrl;
   private long _numRecordsWritten = 0;
   private long _numBytesWritten = 0;
+  private Optional<ResponseClassifierMetrics> _responseMetrics;
 
 
+  /**
+   * Standard constructor to be used in Gobblin Jobs
+   */
   public HttpWriter(State state) {
-    this(state, LoggerFactory.getLogger(HttpWriter.class));
+    this(state,
+         Optional.<Logger>absent(),
+         Optional.<HttpResponseClassifier>absent(),
+         Optional.<CloseableHttpClient>absent());
   }
 
-  public HttpWriter(State state, Logger log) {
+  private static HttpResponseClassifier createResponseClassifierFromConfig(Config cfg) {
+    //FIXME
+    return new DefaultHttpResponseClassifier();
+  }
+
+  /**
+   * Creates a new instance of the HTTP Writer
+   * @param state               the job state
+   * @param log                 logger inject; if absent, a default static one will be used
+   * @param responseClassifier  response classifier inject; if not specified, one will be created
+   *                            from the state
+   * @param httpClientInject    HTTP client inject; if not specified, a standard one will be used
+   */
+  HttpWriter(State state, Optional<Logger> log, Optional<HttpResponseClassifier> responseClassifier,
+             Optional<CloseableHttpClient> httpClientInject) {
     super(state);
-    _log = log;
+    _log = log.isPresent() ? log.get() : LoggerFactory.getLogger(HttpWriter.class);
     _debugLogEnabled = _log.isDebugEnabled();
     Config cfg = convertStateToConfig(state).withFallback(DEFAULTS);
     if (_debugLogEnabled) {
@@ -102,9 +126,18 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
       throw new RuntimeException("Unable to create publish URL: " + e, e);
     }
 
-    _client = HttpClientBuilder.create().disableCookieManagement().useSystemProperties().build();
+    _client = httpClientInject.isPresent()
+        ? httpClientInject.get()
+        : HttpClientBuilder.create().disableCookieManagement().useSystemProperties().build();
     _httpRequestTemplate = createHttpRequestTemplate(cfg);
 
+    _responseMetrics = isInstrumentationEnabled()
+        ? Optional.of(new ResponseClassifierMetrics(getMetricContext()))
+        : Optional.<ResponseClassifierMetrics>absent();
+    _responseClassifier = responseClassifier.isPresent()
+        ? responseClassifier.get()
+        : createResponseClassifierFromConfig(cfg);
+    _responseClassifier.setMetrics(_responseMetrics);
   }
 
   private void setCurServerIdx(int httpServerIdx) {
@@ -187,6 +220,29 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
         // Given up retries
         throw new IOException("Unable to send request for " + record);
       }
+      ResponseAction respAction = _responseClassifier.classify(resp);
+      String failMessage = null;
+      switch (respAction) {
+        case ACCEPT: break;
+        case LOG_WARN: _log.warn("Failed to send record: " + record); break;
+        case IGNORE: break;
+        case RETRY:
+          failMessage = "Ran out of retries trying to send the record: " + record;
+          break;
+        case STASH:
+          failMessage = "STASH not supported for record: " + record;
+          break;
+        case FAIL:
+          failMessage = "Unrecoverable failure trying to send record: " + record;
+          break;
+        default:
+          failMessage = "Unknown response action " + respAction + " for record: " + record ;
+          break;
+      }
+      if (null != failMessage) {
+        _log.error(failMessage);
+        throw new RuntimeException(failMessage);
+      }
     }
     catch (CloneNotSupportedException e) {
       // This should not happen because createHttpRequestTemplate() uses it.
@@ -197,15 +253,23 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
   private HttpResponse sendRequestWithRoundRobinRetry(HttpEntityEnclosingRequestBase req) {
     HttpResponse resp = null;
     final int saveHttpServerIdx = _curHttpServerIdx;
+    boolean retry = false;
     do {
       try {
         resp = _client.execute(_curHttpHost, req);
+        if (ResponseAction.RETRY == _responseClassifier.classify(resp)) {
+          switchServer();
+          retry = _curHttpServerIdx != saveHttpServerIdx;
+        }
+        else {
+          retry = false;
+        }
       }
       catch (IOException ioe) {
         _log.error("HTTP request error: " + ioe, ioe);
         switchServer();
       }
-    } while (_curHttpServerIdx != saveHttpServerIdx);
+    } while (retry);
     return resp;
   }
 
@@ -242,11 +306,6 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
 
   public Logger getLog() {
     return _log;
-  }
-
-  @Override
-  protected void regenerateMetrics() {
-    super.regenerateMetrics();
   }
 
   @VisibleForTesting

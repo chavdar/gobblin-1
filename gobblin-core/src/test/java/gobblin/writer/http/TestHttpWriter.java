@@ -24,4 +24,9 @@ public class TestHttpWriter {
       Assert.assertEquals(System.getProperty("http.maxConnections"), "10");
     }
   }
+
+  @Test
+  public void testWriteImpl() throws Exception {
+
+  }
 }
