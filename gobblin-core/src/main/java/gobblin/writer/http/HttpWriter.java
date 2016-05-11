@@ -27,23 +27,23 @@ import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpEntityEnclosingRequestBase;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpPut;
+import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.entity.StringEntity;
-import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.protocol.HTTP;
 import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigValue;
 
 import gobblin.annotation.Alpha;
 import gobblin.config.ConfigBuilder;
 import gobblin.configuration.State;
-import gobblin.instrumented.writer.InstrumentedDataWriter;
 
 /**
  * Writes record to an HTTP server.
@@ -52,8 +52,7 @@ import gobblin.instrumented.writer.InstrumentedDataWriter;
  * using {@link HttpClientBuilder#useSystemProperties()}.
  * */
 @Alpha
-public class HttpWriter<D> extends InstrumentedDataWriter<D> {
-  public static final String CONF_PREFIX = "gobblin.writer.http.";
+public class HttpWriter<D> extends AbstractHttpWriter<D> {
 
   public static final String HTTPCLIENT_CONF_KEY = "httpclient_conf";
   public static final String KEEP_ALIVE_ENABLED_KEY = "keep_alive_enabled";
@@ -69,32 +68,15 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
                    .addPrimitive(PUBLISH_PATH_KEY, "/")
                    .build();
 
-  protected final CloseableHttpClient _client;
   protected final HttpEntityEnclosingRequestBase _httpRequestTemplate;
-  protected final Logger _log;
-  protected final boolean _debugLogEnabled;
   private final List<String> _httpServers;
   private final String _httpMethod;
   private final String _publishPath;
   private final HttpResponseClassifier _responseClassifier;
 
   private int _curHttpServerIdx;
-  private HttpHost _curHttpHost;
   private URI _publishUrl;
-  private long _numRecordsWritten = 0;
-  private long _numBytesWritten = 0;
   private Optional<ResponseClassifierMetrics> _responseMetrics;
-
-
-  /**
-   * Standard constructor to be used in Gobblin Jobs
-   */
-  public HttpWriter(State state) {
-    this(state,
-         Optional.<Logger>absent(),
-         Optional.<HttpResponseClassifier>absent(),
-         Optional.<CloseableHttpClient>absent());
-  }
 
   private static HttpResponseClassifier createResponseClassifierFromConfig(Config cfg) {
     //FIXME
@@ -110,10 +92,8 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
    * @param httpClientInject    HTTP client inject; if not specified, a standard one will be used
    */
   HttpWriter(State state, Optional<Logger> log, Optional<HttpResponseClassifier> responseClassifier,
-             Optional<CloseableHttpClient> httpClientInject) {
-    super(state);
-    _log = log.isPresent() ? log.get() : LoggerFactory.getLogger(HttpWriter.class);
-    _debugLogEnabled = _log.isDebugEnabled();
+             HttpClientBuilder httpClientInject) {
+    super(state, log, httpClientInject);
     Config cfg = convertStateToConfig(state).withFallback(DEFAULTS);
     if (_debugLogEnabled) {
       _log.debug("Config: " + cfg);
@@ -137,9 +117,6 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
       throw new RuntimeException("Unable to create publish URL: " + e, e);
     }
 
-    _client = httpClientInject.isPresent()
-        ? httpClientInject.get()
-        : HttpClientBuilder.create().disableCookieManagement().useSystemProperties().build();
     _httpRequestTemplate = createHttpRequestTemplate(cfg);
 
     _responseMetrics = isInstrumentationEnabled()
@@ -154,6 +131,16 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
   private void setCurServerIdx(int httpServerIdx) {
     _curHttpServerIdx = httpServerIdx;
     _curHttpHost = new HttpHost(_httpServers.get(_curHttpServerIdx));
+  }
+
+  /**
+   * {@inheritDoc}
+   * <p>This default implementation sends the request immediately.
+   */
+  @Override
+  protected ListenableFuture<HttpResponse> sendRequest(HttpUriRequest request) throws IOException {
+    HttpResponse resp = _client.execute(getCurServerHost(), request);
+    return Futures.immediateCheckedFuture(resp);
   }
 
   @VisibleForTesting
@@ -188,28 +175,6 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
     for (Map.Entry<String, ConfigValue> confEntry: httpClientConf.entrySet()) {
       System.setProperty(confEntry.getKey(), confEntry.getValue().unwrapped().toString());
     }
-  }
-
-  @VisibleForTesting
-  static Config convertStateToConfig(State state) {
-    Config config = ConfigBuilder.create().loadProps(state.getProperties(), CONF_PREFIX).build();
-    return config;
-  }
-
-
-  @Override
-  public void cleanup() throws IOException {
-    _client.close();
-  }
-
-  @Override
-  public long recordsWritten() {
-    return _numRecordsWritten;
-  }
-
-  @Override
-  public long bytesWritten() throws IOException {
-    return _numBytesWritten;
   }
 
   @Override
@@ -313,10 +278,6 @@ public class HttpWriter<D> extends InstrumentedDataWriter<D> {
   protected HttpEntityEnclosingRequestBase initializeRequest(HttpEntityEnclosingRequestBase req,
                                                              D record) {
     return req;
-  }
-
-  public Logger getLog() {
-    return _log;
   }
 
   @VisibleForTesting
